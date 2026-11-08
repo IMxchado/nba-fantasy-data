@@ -1,0 +1,30 @@
+name: Actualizar liga
+on:
+  schedule:
+    - cron: "17 */3 * * *"   # cada 3 horas
+  workflow_dispatch:          # boton "Run workflow" (tambien desde la app de GitHub)
+permissions:
+  contents: write
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Descargar datos de ESPN
+        env:
+          ESPN_S2: ${{ secrets.ESPN_S2 }}
+          ESPN_SWID: ${{ secrets.ESPN_SWID }}
+          LEAGUE_ID: "1166310714"
+          TEAM_ID: "17"
+          SEASON: "2027"
+        run: python scripts/fetch_league.py
+      - name: Guardar cambios
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add data/league.json
+          git diff --cached --quiet || git commit -m "Datos actualizados"
+          git push
