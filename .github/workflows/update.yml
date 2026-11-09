@@ -5,6 +5,9 @@ on:
   workflow_dispatch:          # boton "Run workflow" (tambien desde la app de GitHub)
 permissions:
   contents: write
+concurrency:                  # evita que dos ejecuciones choquen al guardar
+  group: actualizar-liga
+  cancel-in-progress: false
 jobs:
   update:
     runs-on: ubuntu-latest
@@ -28,5 +31,7 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
           git add data/league.json data/resumen.json
-          git diff --cached --quiet || git commit -m "Datos actualizados"
+          git diff --cached --quiet && exit 0
+          git commit -m "Datos actualizados"
+          git pull --rebase -X theirs origin main
           git push
