@@ -11,6 +11,7 @@ SLOT_OK = {"PG": {"PG"}, "SG": {"SG"}, "SF": {"SF"}, "PF": {"PF"}, "C": {"C"},
 WEIGHTS = {"ult7": 0.10, "ult15": 0.30, "ult30": 0.25, "proyeccion": 0.35}
 TRADE_MARGIN = 0.12      # diferencia máxima de valor de trade para considerar un trade "justo"
 STAR_EXP = 1.3           # prima por calidad: un jugador de 30 vale más que dos de 20 (consolidación)
+OUT_FACTOR = 0.35        # descuento al valor de trade de un jugador OUT (en esta liga se paga muy poco por lesionados)
 TOP_TRADES_PER_TEAM = 2
 TOP_TRADES = 12
 
@@ -149,8 +150,23 @@ def main():
     for p in allp:
         p["vsr"] = max(0.0, p["valor"] - reemplazo)       # valor sobre reemplazo (para trades)
         if p.get("lesion") == "OUT":
-            p["vsr"] *= 0.6                                # lesionado: nadie lo paga a precio completo
+            p["vsr"] *= OUT_FACTOR                         # en esta liga un lesionado casi no tiene valor de trade
         p["vt"] = p["vsr"] ** STAR_EXP                     # valor de trade (con prima por estrellas)
+
+    # ---- contexto NBA: rol inflado por la baja de un compañero importante ----
+    by_nba = {}
+    for p in allp:
+        by_nba.setdefault(p["equipo_nba"], []).append(p)
+    for p in allp:
+        bajas = [q for q in by_nba.get(p["equipo_nba"], []) if q is not p and q.get("lesion") == "OUT"
+                 and max(fp(q, "proyeccion") or 0, q["valor"]) >= 20]
+        recien = fp(p, "ult15") or fp(p, "ult30")
+        proy = fp(p, "proyeccion")
+        sube = recien is not None and proy is not None and recien > proy * 1.1
+        if bajas and (sube or proy is None):
+            p["alerta"] = "posible rol inflado por la baja de " + ", ".join(q["nombre"] for q in bajas) + " (baja cuando vuelva)"
+        elif bajas:
+            p["alerta"] = "compañero OUT: " + ", ".join(q["nombre"] for q in bajas) + " (revisar minutos al volver)"
 
     rostered = sorted([p for p in allp if p["_team"]], key=lambda p: -p["valor"])
     for i, p in enumerate(rostered, 1):
@@ -162,6 +178,7 @@ def main():
             "ult15": r(fp(p, "ult15")), "proy": r(fp(p, "proyeccion")), "estado": p["lesion"],
             "pj_semana": p["pj_semana"], "pj_prox": p["pj_prox"]}
         if p.get("rank_liga"): o["rank"] = p["rank_liga"]
+        if p.get("alerta"): o["alerta"] = p["alerta"]
         for k in extra: o[k] = p.get(k)
         return o
 
@@ -260,7 +277,10 @@ def main():
         plan_stream.append({"fecha": str(date_of(sp)), "semana": "actual" if sp in days_now else "proxima",
                             "agregar": b["nombre"], "nba": b["equipo_nba"], "valor": r(b["valor"]),
                             "estado": b["lesion"]})
-    adquisiciones = {"regla": "1 adquisición de agencia libre por cada día con partidos; los trades no cuentan",
+    usadas = ((me_t.get("contador_transacciones") or {}).get("matchupAcquisitionTotals") or {}).get(str(per_now), 0)
+    adquisiciones = {"regla": "1 adquisición de agencia libre por cada día con partidos (el día cambia a las 4 a. m.); los trades no cuentan",
+                     "usadas_esta_semana": usadas,
+                     "disponibles_esta_semana": max(0, len(dias_sem) - usadas),
                      "dias_con_partido_semana_actual": len(dias_sem),
                      "dias_con_partido_restantes_hoy_incluido": len([x for x in dias_sem if x >= today]),
                      "dias_con_partido_proxima_semana": len(dias_prox)}
@@ -328,7 +348,7 @@ def main():
                  "slots": L["slots_alineacion"], "adquisiciones": adquisiciones,
                  "waivers_se_procesan": (L.get("adquisiciones") or {}).get("waiverProcessDays"),
                  "trades": L.get("trades"), "valor_reemplazo": r(reemplazo),
-                 "nota_valor": "valor = promedio ponderado de fpts (ult7 10%, ult15 30%, ult30 25%, proyección ESPN 35%); vsr = valor sobre el nivel de los 5 mejores agentes libres (x0.6 si está OUT); valor_trade = vsr^1.3 (prima por estrellas)"},
+                 "nota_valor": "valor = promedio ponderado de fpts (ult7 10%, ult15 30%, ult30 25%, proyección ESPN 35%); vsr = valor sobre el nivel de los 5 mejores agentes libres (x0.35 si está OUT); valor_trade = vsr^1.3 (prima por estrellas)"},
         "mi_equipo": {"nombre": me_name, "record": me_t["record"], "posicion_tabla": pos_tabla[me_id],
                       "fuerza_alineacion": r(prof[me_id]["total"]), "necesita": needs(me_id), "fuerte_en": strengths(me_id),
                       "alineacion_optima": [{"slot": s, "jugador": p["nombre"], "valor": r(p["valor"]), "pj_semana": p["pj_semana"]} for s, p in prof[me_id]["lineup"]]},
