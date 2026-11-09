@@ -84,7 +84,8 @@ def main():
             "abrev": t.get("abbrev"), "es_mi_equipo": t["id"] == TEAM_ID,
             "record": f"{rec.get('wins',0)}-{rec.get('losses',0)}-{rec.get('ties',0)}",
             "puntos_a_favor": r(rec.get("pointsFor"), 1), "puntos_en_contra": r(rec.get("pointsAgainst"), 1),
-            "prioridad_waiver": t.get("waiverRank"), "roster": roster,
+            "prioridad_waiver": t.get("waiverRank"),
+            "contador_transacciones": t.get("transactionCounter"), "roster": roster,
         })
     names = {t["id"]: t["nombre"] for t in teams}
 
@@ -109,6 +110,38 @@ def main():
     except Exception as e:  # el calendario es opcional
         calendario = {"error": str(e)}
 
+    # ---- historial de transacciones (trades aceptados, propuestas, rechazos, waivers y agencia libre) ----
+    names_pid = {}
+    for t in league.get("teams", []):
+        for e in (t.get("roster") or {}).get("entries", []):
+            pl = e["playerPoolEntry"]["player"]; names_pid[pl["id"]] = pl.get("fullName")
+    for x in fa_raw.get("players", []):
+        names_pid[x["player"]["id"]] = x["player"].get("fullName")
+    tx_types = ["TRADE_ACCEPT", "TRADE_PROPOSAL", "TRADE_DECLINE", "TRADE_UPHOLD", "TRADE_VETO", "FREEAGENT", "WAIVER"]
+    tx_filter = {"transactions": {"filterType": {"value": tx_types}}}
+    transacciones, seen = [], set()
+    try:
+        for sp in range(1, int(league.get("scoringPeriodId") or 1) + 1):
+            raw = get(LEAGUE, ["mTransactions2"], {"X-Fantasy-Filter": json.dumps(tx_filter)}, f"scoringPeriodId={sp}")
+            for x in raw.get("transactions", []) or []:
+                if x.get("id") in seen:
+                    continue
+                seen.add(x.get("id"))
+                fecha = x.get("proposedDate") or x.get("processDate")
+                transacciones.append({
+                    "id": x.get("id"), "tipo": x.get("type"), "estado": x.get("status"),
+                    "fecha_utc": datetime.datetime.fromtimestamp(fecha / 1000, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M") if fecha else None,
+                    "dia_scoring": x.get("scoringPeriodId"), "equipo": names.get(x.get("teamId"), x.get("teamId")),
+                    "relacionada": x.get("relatedTransactionId"),
+                    "items": [{"jugador": names_pid.get(i.get("playerId"), i.get("playerId")), "tipo": i.get("type"),
+                               "de": names.get(i.get("fromTeamId"), "Agencia libre" if not i.get("fromTeamId") else i.get("fromTeamId")),
+                               "a": names.get(i.get("toTeamId"), "Agencia libre" if not i.get("toTeamId") else i.get("toTeamId"))}
+                              for i in x.get("items", []) or []],
+                })
+    except Exception as e:  # el historial es opcional: si falla, no detiene la actualización
+        transacciones.append({"error": str(e)})
+    transacciones.sort(key=lambda t: t.get("fecha_utc") or "")
+
     status = league.get("status", {})
     data = {
         "actualizado_utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M"),
@@ -120,11 +153,12 @@ def main():
                  "calendario_matchups": (st.get("scheduleSettings") or {}).get("matchupPeriods")},
         "equipos": teams, "matchups": matchups, "agentes_libres": free_agents,
         "calendario_nba_dias_con_partido": calendario,
+        "transacciones": transacciones,
     }
     os.makedirs("data", exist_ok=True)
     with open("data/league.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
-    print(f"OK: {len(teams)} equipos, {len(free_agents)} agentes libres, {data['actualizado_utc']} UTC")
+    print(f"OK: {len(teams)} equipos, {len(free_agents)} agentes libres, {len(transacciones)} transacciones, {data['actualizado_utc']} UTC")
 
 
 if __name__ == "__main__":
